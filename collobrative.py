@@ -3,13 +3,26 @@ import numpy as np
 import pickle
 from sklearn.metrics.pairwise import cosine_similarity
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
+import os
 
-# Collaborative Filtering for Item-Based Recommendations
-# This code provides a collaborative filtering approach to recommend companies to investors based on their interaction history.
-# It uses cosine similarity to find similar items based on user interactions.
-# The code includes functions to load interaction data, calculate item similarity, and generate recommendations for a given investor.
+app = FastAPI()
+
+# Add CORS middleware (Important for frontend integration)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # you can restrict to your frontend domain later
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Health check route
+@app.get("/")
+def read_root():
+    return {"message": "Recommendation API is running."}
+
+# Cosine Similarity calculation
 def calculate_item_similarity(ratings_matrix, metric='cosine'):
     if metric == 'cosine':
         item_similarity = cosine_similarity(ratings_matrix.T)
@@ -17,7 +30,7 @@ def calculate_item_similarity(ratings_matrix, metric='cosine'):
         raise ValueError("Unsupported similarity metric.")
     return item_similarity
 
-# Function to recommend items for a given investor based on item similarity
+# Generate recommendations
 def recommend_items(investor_id, ratings_matrix, item_similarity, k=9):
     investor_scores = ratings_matrix.loc[investor_id]
     interacted_companies = investor_scores[investor_scores > 0].index
@@ -40,7 +53,7 @@ def recommend_items(investor_id, ratings_matrix, item_similarity, k=9):
     recommendations = recommendations.sort_values(by='score', ascending=False)
     return recommendations[['company_id']].head(k)
 
-# Function to load interaction data and calculate item similarity
+# Load model files
 def load_data_item_similarity(retrain=False):
     if retrain:
         df_interactions = pd.read_csv('interactions_table.csv')
@@ -71,16 +84,17 @@ def load_data_item_similarity(retrain=False):
         with open('sim_matrix_CF.pkl', 'rb') as f:
             item_similarity = pickle.load(f)
         return user_item_matrix, item_similarity
-    
-def cold_start_recommendations():
-     df_interactions = pd.read_csv('interactions_table.csv')
-     df_new = df_interactions.groupby('company_id').agg({
-            'fund': 'sum',
-        }).reset_index()
-     df_new.sort_values(by='fund', ascending=True, inplace=True)
-     return df_new[['company_id']].head(9).values.flatten().tolist()
 
-# Function to get recommendations for a specific investor
+# Cold start recommendation logic
+def cold_start_recommendations():
+    df_interactions = pd.read_csv('interactions_table.csv')
+    df_new = df_interactions.groupby('company_id').agg({
+        'fund': 'sum',
+    }).reset_index()
+    df_new.sort_values(by='fund', ascending=True, inplace=True)
+    return df_new[['company_id']].head(9).values.flatten().tolist()
+
+# Main recommend function
 def get_recommendations_for_investor(investor_id, k=9):
     user_item_matrix, item_similarity = load_data_item_similarity(retrain=False)
     if investor_id not in user_item_matrix.index:
@@ -88,16 +102,12 @@ def get_recommendations_for_investor(investor_id, k=9):
     recommendations = recommend_items(investor_id, user_item_matrix, item_similarity, k)
     return {'investor_id': investor_id, 'recommendations': recommendations.values.flatten().tolist()}
 
-
-print(get_recommendations_for_investor(100))  # Example call to test the function
-# FastAPI application to serve recommendations
-app = FastAPI()
-
-@app.get("/{investor_id}")
+# API Endpoint
+@app.get("/recommend/{investor_id}")
 def get_recommendations(investor_id: int):
     try:
         recommendations = get_recommendations_for_investor(investor_id)
         return recommendations
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
